@@ -136,6 +136,28 @@ def print_tools(target: Agent) -> None:
         print(f"  引数: {json.dumps(params, ensure_ascii=False)}")
 
 
+def _print_material_pages(content) -> bool:
+    """search_materials の戻り値から、返したページの一覧を表示する。表示できなければ False。
+
+    表示を変えるだけで、モデルに渡す内容は変えない。
+    """
+    try:
+        data = json.loads(content)
+        results = data["results"]
+    except (TypeError, ValueError, KeyError):
+        return False
+    if data.get("error"):
+        print(f"[tool return] search_materials -> {data['error']}")
+        return True
+    chars = sum(len(r.get("content", "")) for r in results)
+    print(f"[tool return] search_materials -> {len(results)}ページ（本文 計{chars:,}文字）")
+    for r in results:
+        label = {"search": "検索", "neighbor": "前後"}.get(r.get("source"), "検索")
+        extra = f"・{r['neighbor_of']}の隣" if r.get("source") == "neighbor" else ""
+        print(f"    - [{label}{extra}] 第{r.get('lecture')}回・PDF p.{r.get('page')} · {r.get('title', '')}")
+    return True
+
+
 def print_trace(result, elapsed_seconds: float | None = None) -> None:
     """どのツールが、どの引数で呼ばれ、何を返したかを表示する。"""
     print("\n--- trace ---")
@@ -163,6 +185,9 @@ def print_trace(result, elapsed_seconds: float | None = None) -> None:
                                 print(f"      {child['content']}")
                         if not data["children"]:
                             print(f"    （末端ページ・本文{len(node.get('content', ''))}文字を取得）")
+                elif part.tool_name == "search_materials":
+                    if not _print_material_pages(part.content):
+                        print(f"[tool return] {part.tool_name} -> {str(part.content)[:120]}…")
                 else:
                     print(f"[tool return] {part.tool_name} -> {str(part.content)[:120]}…")
     usage = result.usage
