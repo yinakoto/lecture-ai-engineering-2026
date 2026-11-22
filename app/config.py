@@ -22,6 +22,20 @@ RAG_TOP_K = 5
 GRAPH_START_K = 3
 GRAPH_HOPS = 2
 GRAPH_MAX_RESULTS = 10
+
+
+def _neighbor_pages() -> int:
+    """環境変数 AIE_RAG_NEIGHBORS を0以上の整数として読む。未設定なら0。"""
+    value = os.getenv("AIE_RAG_NEIGHBORS", "0").strip()
+    if not value.isdigit():
+        raise SystemExit(f"AIE_RAG_NEIGHBORS は0以上の整数で指定してください（現在: {value!r}）")
+    return int(value)
+
+
+# 第5回 宿題（実装）: ベクトル検索の結果に、同じ資料の前後ページも付ける。
+# 0（既定）なら通常の検索と同じ結果になる。前後1ページずつ足すなら:
+#   AIE_RAG_NEIGHBORS=1 uv run python -m app.agent --trace "質問"
+RAG_NEIGHBOR_PAGES = _neighbor_pages()
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768
 # 2,048トークンの上限に対し、タスク指定等の分を残す。超過時は切り捨てず停止する。

@@ -17,7 +17,7 @@ import sqlite_vec
 from app.config import (
     EMBEDDING_DIMENSIONS, EMBEDDING_MAX_TOKENS, EMBEDDING_MODEL,
     RAG_DB, RAG_DOCUMENT_IDS, RAG_SOURCE, RAG_TOP_K, RAG_TREE, get_api_key,
-    RAG_GRAPH, GRAPH_START_K, GRAPH_HOPS, GRAPH_MAX_RESULTS,
+    RAG_GRAPH, GRAPH_START_K, GRAPH_HOPS, GRAPH_MAX_RESULTS, RAG_NEIGHBOR_PAGES,
 )
 
 
@@ -138,6 +138,47 @@ def search(query: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def add_neighbor_pages(hits: list[dict], window: int = RAG_NEIGHBOR_PAGES) -> list[dict]:
+    """検索結果の後ろに、同じ資料の前後windowページの本文を足す。
+
+    - 検索で見つかったページは、順位も中身もそのまま先頭に残す（source="search"）
+    - 追加したページは後ろに並べ、どのページの隣かを残す（source="neighbor", neighbor_of）
+    - 前後は同じ資料（document_id）の中だけで探し、別の資料はまたがない
+    - 同じページは2回返さない（検索結果どうしが隣り合う場合も含む）
+    window=0 なら hits をそのまま返す（通常の検索と同じ）。
+    """
+    if window < 0:
+        raise ValueError("前後に足すページ数は0以上にしてください。")
+    if window == 0 or not hits:
+        return hits
+
+    by_document = defaultdict(list)
+    for page in load_pages(RAG_SOURCE):
+        by_document[page["document_id"]].append(page)
+    position = {page["page_id"]: (document_id, i)
+                for document_id, pages in by_document.items() for i, page in enumerate(pages)}
+
+    results = [{**hit, "source": "search"} for hit in hits]
+    seen = {hit["page_id"] for hit in hits}
+    for hit in hits:
+        if hit["page_id"] not in position:
+            continue
+        document_id, i = position[hit["page_id"]]
+        pages = by_document[document_id]
+        for j in range(max(0, i - window), min(len(pages), i + window + 1)):
+            page = pages[j]
+            if page["page_id"] in seen:
+                continue
+            seen.add(page["page_id"])
+            results.append({**page, "source": "neighbor", "neighbor_of": hit["page_id"]})
+    return results
+
+
+def search_with_neighbors(query: str, window: int = RAG_NEIGHBOR_PAGES) -> list[dict]:
+    """ベクトル検索（search）の結果に、前後windowページを足して返す。"""
+    return add_neighbor_pages(search(query), window)
+
+
 def search_graph(query: str) -> dict:
     """ベクトル検索を入口に、前後ページと共通用語で候補を広げる。"""
     pages = {page["page_id"]: page for page in load_pages(RAG_SOURCE)}
@@ -201,9 +242,16 @@ def run_full_context(agent, question: str, model, instructions: str, prompt_temp
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="エージェントを使わず、講義資料の検索だけを実行する")
     parser.add_argument("query", help="調べたい内容")
+    parser.add_argument("--neighbors", type=int, default=RAG_NEIGHBOR_PAGES,
+                        help="検索結果に足す前後のページ数（既定: 環境変数 AIE_RAG_NEIGHBORS、未設定なら0）")
     args = parser.parse_args()
-    for i, result in enumerate(search(args.query), 1):
-        print(f"\n{'=' * 60}\n検索結果 {i}\n{'=' * 60}")
+    for i, result in enumerate(search_with_neighbors(args.query, args.neighbors), 1):
+        label = ""
+        if result.get("source") == "search":
+            label = "（検索で取得）"
+        elif result.get("source") == "neighbor":
+            label = f"（前後ページ：{result['neighbor_of']} の隣）"
+        print(f"\n{'=' * 60}\n検索結果 {i}{label}\n{'=' * 60}")
         print(f"講義: {result['document_title']}")
         print(f"章: {result['section']}")
         print(f"タイトル: {result['title']}")
